@@ -1,0 +1,17 @@
+# `docker compose up --build` builds the image and runs the default command
+# (prints CLI help, exits 0) so a fresh clone comes up cleanly with no media.
+#
+# To render, mount your media and pass paths, e.g.:
+#   docker compose run --rm compositor \
+#     node tools/compositor.mjs \
+#       --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/result.mp4
+services:
+  compositor:
+    build: .
+    image: avatar-compositor
+    working_dir: /app
+    volumes:
+      # Local media in / renders out. These dirs are git-ignored.
+      - ./assets:/app/assets
+      - ./outputs:/app/outputs
+    command: ["node", "tools/compositor.mjs", "--help"]

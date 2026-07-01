@@ -1,0 +1,17 @@
+{
+  "name": "avatar-compositor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone ffmpeg CLI that composites an avatar clip over b-roll (circular PiP).",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "avatar-compositor": "tools/compositor.mjs"
+  },
+  "scripts": {
+    "start": "node tools/compositor.mjs --help",
+    "check:js": "node --check tools/compositor.mjs && node tools/compositor.mjs --self-test"
+  }
+}
