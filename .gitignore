@@ -4,8 +4,6 @@ node_modules/
 outputs/*
 !outputs/.gitkeep
 
-# Sample/input media is large — not committed. Drop files in assets/ or pass paths.
-assets/
 
 *.log
 .DS_Store
