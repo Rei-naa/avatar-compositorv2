@@ -54,25 +54,31 @@ Usage:
   node tools/compositor.mjs --avatar <file> --broll <file> --out <file> [options]
 
 Required:
-  --avatar <file>     Talking-host clip. Drives output length + supplies audio.
-                      Repeat with --broll to add scenes (see below).
+  --avatar <file>     Talking-host clip for the circular bubble. In a background
+                      sequence it is ONE persistent overlay (see below).
   --broll  <file>     Full-frame footage: a video clip OR a still image
-                      (.jpg/.png/...). Looped/trimmed to length.
+                      (.jpg/.png/...). Repeat to build a background sequence.
   --out    <file>     Output .mp4 path.
 
-Scenes (storyboard):
-  Repeat --avatar / --broll in pairs to build a multi-scene video; the pairs are
-  concatenated and each gets an equal slice of the total length. Requires --audio
-  or --duration to set the total. Example:
-    --broll bg1.png --avatar host1.mp4 --broll bg2.png --avatar host2.mp4 \\
+Background sequence:
+  Pass ONE --avatar and MULTIPLE --broll to lay an ordered background sequence
+  under a single, persistent avatar bubble. The backgrounds play once, in order:
+  video clips at their natural length, still images for --still-duration with a
+  slow zoom. The avatar stays composited for the whole video (looping if its clip
+  is shorter than the narration). Total length is the sum of the backgrounds; when
+  --audio/--duration is set, the still durations auto-fit so it matches. Example:
+    --avatar host.mp4 --broll bg1.jpg --broll clip2.mp4 --broll clip3.mp4 \\
     --audio vo.mp3 --out story.mp4
 
 Options:
-  --variant <name>    pip (default) or split (left/right split-screen).
-  --audio  <file>     Optional external voiceover. Makes it the soundtrack, sets
-                      output length to its duration, and loops the avatar + b-roll
-                      to fill. Omit to use the avatar clip's own audio + length.
+  --variant <name>    pip (default) or split (left/right split-screen). Single
+                      --avatar + single --broll only.
+  --audio  <file>     Optional external voiceover / narration. Becomes the
+                      soundtrack and sets the target length.
   --duration <sec>    Force total output length (overrides probing).
+  --still-duration <sec>
+                      Seconds each still-image background shows. Default auto-fits
+                      to --audio/--duration, else 4s.
   --bubble  <px>      Circular bubble diameter (pip). Default ${DEFAULTS.bubble} (~30% of height).
   --margin  <px>      Edge margin for the bubble (pip). Default ${DEFAULTS.margin}.
   --position <pos>    bubble corner (pip): bottom-left (default), bottom-right,
@@ -91,9 +97,10 @@ Examples:
   node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/result.mp4
   node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/split.mp4 --variant split
   node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --audio assets/audio.mp3 --out outputs/voiced.mp4
-  node tools/compositor.mjs \\
-    --broll assets/frame1-background.jpg --avatar assets/frame1.mp4 \\
-    --broll assets/frame4-background.png --avatar assets/frame4.mp4 \\
+  node tools/compositor.mjs --avatar assets/frame4.mp4 \\
+    --broll assets/frame1-background.jpg --broll assets/frame2.mp4 --broll assets/frame3.mp4 \\
+    --broll assets/frame4-background.png --broll assets/frame5.mp4 --broll assets/frame6.mp4 \\
+    --broll assets/frame7.mp4 --broll assets/frame8.mp4 --broll assets/frame9.mp4 \\
     --audio assets/audio.mp3 --out outputs/result.mp4
 `);
 }
@@ -101,7 +108,9 @@ Examples:
 function parseArgs(argv) {
   const opts = { ...DEFAULTS };
   const flags = new Set(['help', 'dry-run', 'self-test']);
-  const numeric = new Set(['bubble', 'margin', 'width', 'height', 'crf', 'supersample', 'duration']);
+  const numeric = new Set([
+    'bubble', 'margin', 'width', 'height', 'crf', 'supersample', 'duration', 'still-duration',
+  ]);
   const lists = new Set(['avatar', 'broll']); // repeatable -> one scene per pair
   for (let i = 0; i < argv.length; i++) {
     let arg = argv[i];
@@ -142,14 +151,6 @@ function coverChain(inputLabel, w, h) {
 
 function isImage(file) {
   return /\.(jpe?g|png|webp|bmp|gif|tiff?)$/i.test(file);
-}
-
-// Pre-`-i` flags that turn an input into an infinite looping source: a still
-// image is looped as video (`-loop 1`), a clip loops its stream (`-stream_loop`).
-function loopInputFlags(file, fps) {
-  return isImage(file)
-    ? ['-loop', '1', '-framerate', String(fps)]
-    : ['-stream_loop', '-1'];
 }
 
 // Avatar -> centre-crop to a square, upscale, punch a hard circular alpha mask
@@ -237,45 +238,75 @@ function buildFfmpegArgs(o, durationSec) {
   return args;
 }
 
-// Build a multi-scene render: each scene is a (background, avatar) pair composited
-// as a PiP, trimmed to an equal slice of the total, then concatenated. Backgrounds
-// may be stills or clips; the total is driven by --audio (or --duration). The last
-// scene is padded slightly so the video always covers the full audio.
-function buildScenesArgs(o, scenes, totalDuration, fps = 30) {
+// One still-image background segment with a slow centre zoom (Ken Burns). The
+// image is pre-scaled larger so zoompan's integer crop steps stay smooth.
+function zoomBgChain(inLabel, outLabel, { width, height, duration, fps }) {
+  const frames = Math.max(1, Math.round(duration * fps));
+  const zmax = 1.12;
+  const inc = ((zmax - 1) / frames).toFixed(6);
+  return (
+    `[${inLabel}]scale=${2 * width}:${2 * height}:force_original_aspect_ratio=increase,` +
+    `crop=${2 * width}:${2 * height},` +
+    `zoompan=z='min(zoom+${inc},${zmax})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `d=${frames}:s=${width}x${height}:fps=${fps},` +
+    `trim=duration=${duration.toFixed(3)},setsar=1,format=yuv420p,setpts=PTS-STARTPTS[${outLabel}]`
+  );
+}
+
+// One video background segment: cover-fill the frame at its natural length.
+function videoBgChain(inLabel, outLabel, { width, height, fps }) {
+  return (
+    `[${inLabel}]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
+    `crop=${width}:${height},setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[${outLabel}]`
+  );
+}
+
+// Build a background-sequence render: an ordered list of backgrounds concatenated
+// exactly once (video clips at natural length, stills for `duration` with a zoom),
+// with ONE persistent avatar overlaid on top for the whole video. The avatar is a
+// single global input looped on its own clock (`-stream_loop -1` + one trim to the
+// total), so it never restarts at background boundaries -- it just loops smoothly
+// because the source clip is shorter than the narration.
+function buildSequenceArgs(o, backgrounds, total, fps = 30) {
   const { width, height, position, margin, crf, preset } = o;
   const { x, y } = overlayPos(position, margin);
-  const n = scenes.length;
-  const per = totalDuration / n;
+  const n = backgrounds.length;
 
   const args = ['-hide_banner', '-loglevel', 'warning', '-stats', '-y'];
-  // Inputs, in order: for each scene the background then the avatar; then audio.
-  for (const s of scenes) {
-    args.push(...loopInputFlags(s.broll, fps), '-i', s.broll);
-    args.push(...loopInputFlags(s.avatar, fps), '-i', s.avatar);
+  // Background inputs (in order): stills loop as video (bounded by trim); video
+  // clips are read once so the sequence never repeats.
+  for (const b of backgrounds) {
+    if (b.image) args.push('-loop', '1', '-framerate', String(fps));
+    args.push('-i', b.file);
   }
+  const avatarIdx = n; // single global avatar input, right after the backgrounds
+  args.push('-stream_loop', '-1', '-i', o.avatar);
+  const audioIdx = n + 1;
   if (o.audio) args.push('-i', o.audio);
 
   const chains = [];
-  const sceneLabels = [];
-  scenes.forEach((s, k) => {
-    const bgIn = 2 * k;
-    const avIn = 2 * k + 1;
-    const dur = (k === n - 1 ? per + 1 : per).toFixed(3); // pad last -> covers audio
+  const labels = [];
+  backgrounds.forEach((b, k) => {
     chains.push(
-      `[${bgIn}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
-        `crop=${width}:${height},setsar=1,fps=${fps},format=yuv420p,` +
-        `trim=duration=${dur},setpts=PTS-STARTPTS[bg${k}]`,
+      b.image
+        ? zoomBgChain(`${k}:v`, `bg${k}`, { width, height, duration: b.duration, fps })
+        : videoBgChain(`${k}:v`, `bg${k}`, { width, height, fps }),
     );
-    chains.push(circleAvatarChain(`${avIn}:v`, `avc${k}`, o));
-    chains.push(`[avc${k}]fps=${fps},trim=duration=${dur},setpts=PTS-STARTPTS[av${k}]`);
-    chains.push(`[bg${k}][av${k}]overlay=x=${x}:y=${y},format=yuv420p[scene${k}]`);
-    sceneLabels.push(`[scene${k}]`);
+    labels.push(`[bg${k}]`);
   });
-  chains.push(`${sceneLabels.join('')}concat=n=${n}:v=1:a=0[vout]`);
+  // Background timeline: the sequence, in order, exactly once.
+  chains.push(`${labels.join('')}concat=n=${n}:v=1:a=0[bgcat]`);
+
+  // Avatar timeline: one continuous, looped track, independent of the backgrounds.
+  chains.push(circleAvatarChain(`${avatarIdx}:v`, 'avc', o));
+  chains.push(`[avc]fps=${fps},trim=duration=${total.toFixed(3)},setpts=PTS-STARTPTS[av]`);
+
+  // A single overlay of the persistent avatar over the whole background timeline.
+  chains.push(`[bgcat][av]overlay=x=${x}:y=${y}[vout]`);
 
   args.push('-filter_complex', chains.join(';'), '-map', '[vout]');
-  if (o.audio) args.push('-map', `${2 * n}:a`);
-  args.push('-t', totalDuration.toFixed(3));
+  if (o.audio) args.push('-map', `${audioIdx}:a`);
+  args.push('-t', total.toFixed(3));
   args.push(
     '-c:v', 'libx264',
     '-preset', preset,
@@ -334,6 +365,46 @@ async function probeDurationSec(file, ffprobe) {
   }
 }
 
+// Resolve the ordered background list into concrete per-segment durations.
+// Video clips keep their natural length; stills are sized to --still-duration,
+// or auto-fit so the sequence total matches --audio / --duration. The total the
+// avatar + audio are matched to is the SUM of the segments (background-driven),
+// which guarantees the sequence plays once in full without truncation.
+async function resolveSequence(o, brolls) {
+  const backgrounds = brolls.map((file) => ({ file, image: isImage(file) }));
+  const natural = await Promise.all(
+    backgrounds.map((b) => (b.image ? Promise.resolve(null) : probeDurationSec(b.file, o.ffprobe))),
+  );
+  backgrounds.forEach((b, i) => {
+    if (!b.image && !Number.isFinite(natural[i])) {
+      throw new Error(`Could not probe b-roll duration (ffprobe required): ${b.file}`);
+    }
+  });
+
+  const videoSum = natural.reduce((sum, d) => sum + (d || 0), 0);
+  const stillCount = backgrounds.filter((b) => b.image).length;
+
+  let target = Number.isFinite(o.duration) ? o.duration : null;
+  if (target === null && o.audio) target = await probeDurationSec(o.audio, o.ffprobe);
+
+  const MIN_STILL = 1;
+  const DEFAULT_STILL = 4;
+  let stillEach;
+  if (Number.isFinite(o.stillDuration)) {
+    stillEach = o.stillDuration;
+  } else if (Number.isFinite(target) && stillCount > 0) {
+    stillEach = Math.max(MIN_STILL, (target - videoSum) / stillCount); // auto-fit to narration
+  } else {
+    stillEach = DEFAULT_STILL;
+  }
+
+  backgrounds.forEach((b, i) => {
+    b.duration = b.image ? stillEach : natural[i];
+  });
+  const total = backgrounds.reduce((sum, b) => sum + b.duration, 0);
+  return { backgrounds, total };
+}
+
 function assert(cond, msg) {
   if (!cond) throw new Error(`self-test failed: ${msg}`);
 }
@@ -368,22 +439,27 @@ function selfTest() {
   assert(av.includes('vo.mp3') && av.includes('2:a'), 'external voiceover mapped as audio');
   assert(!av.includes('0:a?'), 'avatar audio not mapped when --audio is set');
 
-  // Multi-scene: two (background, avatar) pairs concatenated over one voiceover.
-  const scenes = buildScenesArgs(
-    { ...DEFAULTS, audio: 'vo.mp3', out: 'o.mp4' },
+  // Background sequence: ordered backgrounds concatenated once under ONE avatar.
+  const seq = buildSequenceArgs(
+    { ...DEFAULTS, avatar: 'host.mp4', audio: 'vo.mp3', out: 'o.mp4' },
     [
-      { broll: 'bg1.png', avatar: 'a1.mp4' },
-      { broll: 'bg2.jpg', avatar: 'a2.mp4' },
+      { file: 'bg1.png', image: true, duration: 3 },
+      { file: 'clip2.mp4', image: false, duration: 4 },
+      { file: 'clip3.mp4', image: false, duration: 5 },
     ],
-    36,
+    12,
   );
-  const scenesStr = scenes.join(' ');
-  assert(scenes.filter((a) => a === '-i').length === 5, 'two scenes -> 4 media inputs + 1 audio');
-  assert(scenes.includes('-loop'), 'image background uses -loop 1');
-  assert(scenes.includes('-stream_loop'), 'clip avatar uses -stream_loop');
-  assert(/concat=n=2:v=1:a=0\[vout\]/.test(scenesStr), 'two scenes concatenated');
-  assert(scenes[scenes.indexOf('-t') + 1] === '36.000', 'multi-scene total duration');
-  assert(scenes.includes('4:a'), 'audio mapped from the last (voiceover) input');
+  const seqStr = seq.join(' ');
+  assert(seq.filter((a) => a === '-i').length === 5, '3 backgrounds + avatar + audio = 5 inputs');
+  assert(seq.filter((a) => a === '-loop').length === 1, 'each still background uses -loop 1');
+  assert(seq.filter((a) => a === '-stream_loop').length === 1, 'only the avatar loops (single global track)');
+  assert(seqStr.includes('zoompan'), 'still background gets a zoom');
+  assert(/concat=n=3:v=1:a=0\[bgcat\]/.test(seqStr), 'backgrounds concatenated once, in order');
+  assert(seqStr.includes('[3:v]crop='), 'avatar is the input after the 3 backgrounds');
+  assert(/\[avc\]fps=30,trim=duration=12\.000/.test(seqStr), 'single avatar timeline spans the whole video');
+  assert(/\[bgcat\]\[av\]overlay=x=40:y=H-h-40\[vout\]/.test(seqStr), 'one overlay of the global avatar');
+  assert(seq[seq.indexOf('-t') + 1] === '12.000', 'total = background sequence length');
+  assert(seq.includes('4:a'), 'narration mapped from the last input');
 
   process.stdout.write('self-test passed\n');
 }
@@ -403,12 +479,6 @@ async function main() {
   if (missing.length) {
     throw new Error(`Missing required option(s): ${missing.join(', ')}\nRun with --help for usage.`);
   }
-  if (avatars.length !== brolls.length) {
-    throw new Error(
-      `--avatar (${avatars.length}) and --broll (${brolls.length}) counts must match; ` +
-        `each pair is one scene.`,
-    );
-  }
   for (const f of [...avatars, ...brolls]) {
     if (!existsSync(f)) throw new Error(`Input file not found: ${f}`);
   }
@@ -417,30 +487,31 @@ async function main() {
   }
   mkdirSync(dirname(resolve(opts.out)), { recursive: true });
 
-  const scenes = avatars.map((avatar, i) => ({ avatar, broll: brolls[i] }));
   let args;
   let duration;
+  const isSingle = avatars.length === 1 && brolls.length === 1;
 
-  if (scenes.length === 1) {
-    opts.avatar = scenes[0].avatar;
-    opts.broll = scenes[0].broll;
-    // Length is driven by --duration, else the voiceover, else the avatar clip.
+  if (isSingle) {
+    // Single avatar + single b-roll (unchanged): pip or split, avatar/audio drive length.
+    opts.avatar = avatars[0];
+    opts.broll = brolls[0];
     duration = opts.duration || (await probeDurationSec(opts.audio || opts.avatar, opts.ffprobe));
     args = buildFfmpegArgs(opts, duration);
   } else {
+    // Background sequence: many --broll under ONE persistent avatar (--avatar).
     if (opts.variant && opts.variant !== 'pip') {
-      throw new Error('Multi-scene rendering supports only --variant pip.');
+      throw new Error('The background sequence supports only --variant pip.');
     }
-    duration = opts.duration;
-    if (!duration && opts.audio) duration = await probeDurationSec(opts.audio, opts.ffprobe);
-    if (!duration) {
-      const each = await Promise.all(scenes.map((s) => probeDurationSec(s.avatar, opts.ffprobe)));
-      if (each.every((d) => Number.isFinite(d))) duration = each.reduce((a, b) => a + b, 0);
+    if (avatars.length > 1) {
+      process.stderr.write(
+        `[compositor] note: ${avatars.length} --avatar clips given; using the first as the ` +
+          `single persistent overlay (the avatar is one global track, not per-scene).\n`,
+      );
     }
-    if (!Number.isFinite(duration) || duration <= 0) {
-      throw new Error('Could not determine total duration. Pass --audio or --duration for multi-scene.');
-    }
-    args = buildScenesArgs(opts, scenes, duration);
+    opts.avatar = avatars[0];
+    const seq = await resolveSequence(opts, brolls);
+    duration = seq.total;
+    args = buildSequenceArgs(opts, seq.backgrounds, duration);
   }
 
   if (opts.dryRun) {
@@ -449,7 +520,8 @@ async function main() {
   }
 
   const durMsg = duration ? `${duration.toFixed(2)}s` : 'shortest-input';
-  process.stderr.write(`[compositor] scenes=${scenes.length} out=${opts.out} duration=${durMsg}\n`);
+  const mode = isSingle ? `variant=${opts.variant}` : `sequence=${brolls.length}`;
+  process.stderr.write(`[compositor] ${mode} out=${opts.out} duration=${durMsg}\n`);
   await run(opts.ffmpeg, args);
   process.stderr.write(`[compositor] done -> ${opts.out}\n`);
 }
@@ -470,5 +542,5 @@ export {
   buildPipGraph,
   buildSplitGraph,
   buildFfmpegArgs,
-  buildScenesArgs,
+  buildSequenceArgs,
 };

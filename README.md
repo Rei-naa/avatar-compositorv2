@@ -67,23 +67,34 @@ and **both** the avatar bubble and the b-roll loop to fill. Note: a short avatar
 clip will visibly loop, and it won't lip-sync to an unrelated voiceover — with
 these assets it's a "talking-head b-roll" bubble, not synced narration.
 
-### Multi-scene storyboard (repeat `--avatar` / `--broll`)
+### Background sequence (one avatar, many `--broll`)
 
-Repeat `--avatar` and `--broll` in **pairs** to build a multi-scene video. The
-pairs are composited (PiP each) and concatenated, each scene getting an equal
-slice of the total length. Backgrounds can be **stills** (`.jpg` / `.png` / …)
-or clips. Set the total with `--audio` (voiceover) or `--duration`:
+Pass **one** `--avatar` and **repeat** `--broll` to lay an ordered background
+sequence under a single, persistent avatar bubble:
 
 ```bash
-node tools/compositor.mjs \
-  --broll assets/frame1-background.jpg --avatar assets/frame1.mp4 \
-  --broll assets/frame4-background.png --avatar assets/frame4.mp4 \
+node tools/compositor.mjs --avatar assets/frame4.mp4 \
+  --broll assets/frame1-background.jpg --broll assets/frame2.mp4 --broll assets/frame3.mp4 \
+  --broll assets/frame4-background.png --broll assets/frame5.mp4 --broll assets/frame6.mp4 \
+  --broll assets/frame7.mp4 --broll assets/frame8.mp4 --broll assets/frame9.mp4 \
   --audio assets/audio.mp3 --out outputs/result.mp4
 ```
 
-This gives a 37s video: scene 1 = the sea still with `frame1` in the bubble,
-scene 2 = the parchment still with `frame4` in the bubble, over the full
-voiceover. The last scene is padded slightly so the video always covers the audio.
+Design (this is the important part):
+
+- **Background timeline** — the `--broll` list is concatenated **exactly once, in
+  order**. Video clips play at their **natural length**; still images
+  (`.jpg`/`.png`/…) play for `--still-duration` with a slow **zoom**. Nothing is
+  skipped, repeated, or reordered.
+- **Avatar timeline** — the avatar is a **single global input**, circle-masked
+  once and overlaid once over the whole video. It loops on **its own clock**
+  (`-stream_loop -1` + one trim to the total), so it stays on screen for the
+  entire duration and never restarts at background boundaries. (It still *loops*,
+  because the source clip is shorter than the narration — that's expected; the
+  compositor does not synthesise or extend the avatar.)
+- **Length** — the total is the **sum of the backgrounds** (so the sequence always
+  plays in full). When `--audio`/`--duration` is given, the **still** durations
+  auto-fit so the total matches the narration.
 
 ## Docker
 
