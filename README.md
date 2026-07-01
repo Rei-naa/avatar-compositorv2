@@ -51,6 +51,22 @@ node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 \
 Produces a left/right split-screen (avatar left, b-roll right), audio from the
 avatar, same length-matching behaviour.
 
+### Full-length voiceover (`--audio`)
+
+By default the output length equals the **avatar clip's** length and the audio is
+the avatar clip's own track. If your voiceover is a separate file (e.g. a 37s
+`audio.mp3`) and the avatar/b-roll are short snippets, pass `--audio`:
+
+```bash
+node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 \
+  --audio assets/audio.mp3 --out outputs/voiced.mp4
+```
+
+Then the output length = the **audio** length, that track becomes the soundtrack,
+and **both** the avatar bubble and the b-roll loop to fill. Note: a short avatar
+clip will visibly loop, and it won't lip-sync to an unrelated voiceover — with
+these assets it's a "talking-head b-roll" bubble, not synced narration.
+
 ## Docker
 
 Docker installs `ffmpeg` inside the image. The default compose command prints
@@ -89,8 +105,9 @@ the filter graphs offline and asserts them (no `ffmpeg` needed).
 - **Circle without image assets.** The bubble alpha is punched with `ffmpeg`'s
   `geq` at 2x size and downscaled, which anti-aliases the edge — no PNG masks or
   runtime dependencies.
-- **Exact duration.** `ffprobe` reads the avatar duration and passes `-t`; if
-  `ffprobe` is unavailable it falls back to `-shortest`.
+- **Exact duration.** `ffprobe` reads the driving clip's duration (the avatar,
+  or the `--audio` track when given) and passes `-t`; if `ffprobe` is unavailable
+  it falls back to `-shortest`.
 - **Sample media is not committed** (it's large). Drop clips in `assets/` or pass
   any paths. `outputs/` and `assets/` are git-ignored.
 

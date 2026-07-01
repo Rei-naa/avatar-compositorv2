@@ -60,6 +60,9 @@ Required:
 
 Options:
   --variant <name>    pip (default) or split (left/right split-screen).
+  --audio  <file>     Optional external voiceover. Makes it the soundtrack, sets
+                      output length to its duration, and loops the avatar + b-roll
+                      to fill. Omit to use the avatar clip's own audio + length.
   --bubble  <px>      Circular bubble diameter (pip). Default ${DEFAULTS.bubble} (~30% of height).
   --margin  <px>      Edge margin for the bubble (pip). Default ${DEFAULTS.margin}.
   --position <pos>    bubble corner (pip): bottom-left (default), bottom-right,
@@ -77,6 +80,7 @@ Options:
 Examples:
   node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/result.mp4
   node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/split.mp4 --variant split
+  node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --audio assets/audio.mp3 --out outputs/voiced.mp4
 `);
 }
 
@@ -159,17 +163,22 @@ function buildGraph(o) {
 
 function buildFfmpegArgs(o, durationSec) {
   const { graph, videoLabel } = buildGraph(o);
-  const args = [
-    '-hide_banner',
-    '-loglevel', 'warning',
-    '-stats',
-    '-y',
-    '-i', o.avatar,
-    '-stream_loop', '-1', '-i', o.broll, // loop b-roll so it always outlasts the avatar
-    '-filter_complex', graph,
-    '-map', videoLabel,
-    '-map', '0:a?', // audio from the avatar clip, if present
-  ];
+  const hasExternalAudio = Boolean(o.audio);
+
+  const args = ['-hide_banner', '-loglevel', 'warning', '-stats', '-y'];
+  // Input 0: avatar. Loop it only when an external voiceover extends the length
+  // beyond the clip (otherwise the avatar clip itself drives duration).
+  if (hasExternalAudio) args.push('-stream_loop', '-1');
+  args.push('-i', o.avatar);
+  // Input 1: b-roll, always looped so it outlasts the avatar.
+  args.push('-stream_loop', '-1', '-i', o.broll);
+  // Input 2 (optional): external voiceover track.
+  if (hasExternalAudio) args.push('-i', o.audio);
+
+  args.push('-filter_complex', graph, '-map', videoLabel);
+  // Audio: the external voiceover if given, else the avatar clip's own track.
+  args.push('-map', hasExternalAudio ? '2:a' : '0:a?');
+
   // Prefer an explicit duration (exact + deterministic); fall back to -shortest.
   if (Number.isFinite(durationSec) && durationSec > 0) {
     args.push('-t', durationSec.toFixed(3));
@@ -214,15 +223,15 @@ function run(bin, args, { capture = false } = {}) {
   });
 }
 
-async function probeDurationSec(o) {
+async function probeDurationSec(file, ffprobe) {
   try {
     const { out } = await run(
-      o.ffprobe,
+      ffprobe,
       [
         '-v', 'error',
         '-show_entries', 'format=duration',
         '-of', 'default=noprint_wrappers=1:nokey=1',
-        o.avatar,
+        file,
       ],
       { capture: true },
     );
@@ -259,6 +268,15 @@ function selfTest() {
   assert(args[args.indexOf('-t') + 1] === '4.000', 'explicit output duration');
   assert(args.includes('0:a?'), 'audio mapped from avatar');
 
+  // With an external voiceover: avatar loops too and audio comes from input 2.
+  const av = buildFfmpegArgs(
+    { ...DEFAULTS, avatar: 'a.mp4', broll: 'b.mp4', audio: 'vo.mp3', out: 'o.mp4' },
+    37,
+  );
+  assert(av.filter((a) => a === '-stream_loop').length === 2, 'avatar + b-roll both looped with --audio');
+  assert(av.includes('vo.mp3') && av.includes('2:a'), 'external voiceover mapped as audio');
+  assert(!av.includes('0:a?'), 'avatar audio not mapped when --audio is set');
+
   process.stdout.write('self-test passed\n');
 }
 
@@ -279,9 +297,13 @@ async function main() {
   for (const k of ['avatar', 'broll']) {
     if (!existsSync(opts[k])) throw new Error(`--${k} file not found: ${opts[k]}`);
   }
+  if (opts.audio && !existsSync(opts.audio)) {
+    throw new Error(`--audio file not found: ${opts.audio}`);
+  }
   mkdirSync(dirname(resolve(opts.out)), { recursive: true });
 
-  const duration = await probeDurationSec(opts);
+  // Length is driven by the external voiceover if given, else the avatar clip.
+  const duration = await probeDurationSec(opts.audio || opts.avatar, opts.ffprobe);
   const args = buildFfmpegArgs(opts, duration);
 
   if (opts.dryRun) {
