@@ -1,0 +1,2 @@
+# Keep shell scripts LF so they run under Git Bash / Docker on Windows checkouts.
+*.sh text eol=lf

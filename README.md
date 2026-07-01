@@ -126,6 +126,17 @@ docker compose run --rm compositor node tools/compositor.mjs \
   --out    outputs/result.mp4
 ```
 
+## Quick demo
+
+With the sample media in `assets/`, render the full background-sequence demo
+(via Docker) in one command:
+
+```bash
+bash scripts/render-demo.sh
+```
+
+It builds the image, renders `outputs/result.mp4`, and prints the output summary.
+
 ## Checks
 
 ```bash
