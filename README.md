@@ -109,9 +109,10 @@ Design (this is the important part):
 
 ## Render the demo
 
-Both workflows below run the **same** compositor command on the sample media
-(`frame4.mp4` avatar over `frame2.mp4` b-roll) and produce the **same**
-`outputs/result.mp4`. Pick one.
+Both workflows below run the **same** compositor command — the narrated
+background-sequence demo (one persistent avatar over an ordered b-roll sequence,
+driven by `audio.mp3`) — and produce the **same** ~37s `outputs/result.mp4`. Pick
+one.
 
 ### Local (Recommended)
 
@@ -131,7 +132,11 @@ This runs [`scripts/render-demo.js`](scripts/render-demo.js), which checks that
 not), creates `outputs/` if needed, and renders with your system ffmpeg:
 
 ```bash
-node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/result.mp4
+node tools/compositor.mjs --avatar assets/frame1.mp4 --avatar-center-x 0.52 \
+  --broll assets/frame1-background.jpg --broll assets/frame2.mp4 --broll assets/frame3.mp4 \
+  --broll assets/frame4-background.png --broll assets/frame5.mp4 --broll assets/frame6.mp4 \
+  --broll assets/frame7.mp4 --broll assets/frame8.mp4 --broll assets/frame9.mp4 \
+  --audio assets/audio.mp3 --out outputs/result.mp4
 ```
 
 ### Docker (Optional)
@@ -149,9 +154,11 @@ equivalent raw command:
 
 ```bash
 docker compose run --rm compositor node tools/compositor.mjs \
-  --avatar assets/frame4.mp4 \
-  --broll  assets/frame2.mp4 \
-  --out    outputs/result.mp4
+  --avatar assets/frame1.mp4 --avatar-center-x 0.52 \
+  --broll assets/frame1-background.jpg --broll assets/frame2.mp4 --broll assets/frame3.mp4 \
+  --broll assets/frame4-background.png --broll assets/frame5.mp4 --broll assets/frame6.mp4 \
+  --broll assets/frame7.mp4 --broll assets/frame8.mp4 --broll assets/frame9.mp4 \
+  --audio assets/audio.mp3 --out outputs/result.mp4
 ```
 
 The default compose command prints CLI help, so a fresh clone comes up cleanly with

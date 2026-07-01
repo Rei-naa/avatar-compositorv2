@@ -3,9 +3,10 @@
 // and the system ffmpeg/ffprobe (no Docker). Cross-platform: Windows (PowerShell /
 // Git Bash), macOS, and Linux. Zero npm dependencies.
 //
-// It verifies node/ffmpeg/ffprobe are available, ensures outputs/ exists, then runs
-// the compositor to produce outputs/result.mp4. For the containerised equivalent
-// (same command, same output) see scripts/render-demo-docker.sh.
+// It verifies node/ffmpeg/ffprobe are available, ensures outputs/ exists, then
+// renders the narrated background-sequence demo (one persistent avatar over an
+// ordered b-roll sequence, driven by the voiceover) to outputs/result.mp4. For the
+// containerised equivalent (same command, same output) see render-demo-docker.sh.
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -17,8 +18,22 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
 const ffprobe = process.env.FFPROBE_PATH || 'ffprobe';
 
-const AVATAR = 'assets/frame4.mp4';
-const BROLL = 'assets/frame2.mp4';
+// The narrated background-sequence demo: one persistent avatar (frame1) over an
+// ordered b-roll sequence, with audio.mp3 as the voiceover that drives the length.
+const AVATAR = 'assets/frame1.mp4';
+const AVATAR_CENTER_X = '0.52'; // centre frame1's off-centre face in the bubble
+const BROLLS = [
+  'assets/frame1-background.jpg',
+  'assets/frame2.mp4',
+  'assets/frame3.mp4',
+  'assets/frame4-background.png',
+  'assets/frame5.mp4',
+  'assets/frame6.mp4',
+  'assets/frame7.mp4',
+  'assets/frame8.mp4',
+  'assets/frame9.mp4',
+];
+const AUDIO = 'assets/audio.mp3';
 const OUT = 'outputs/result.mp4';
 
 function fail(msg) {
@@ -51,7 +66,7 @@ if (missing.length) {
 process.stdout.write(`  ffmpeg  ${ffmpeg}\n  ffprobe ${ffprobe}\n`);
 
 // The sample media is not part of the checkout in every setup, so check first.
-for (const f of [AVATAR, BROLL]) {
+for (const f of [AVATAR, ...BROLLS, AUDIO]) {
   if (!existsSync(join(root, f))) {
     fail(`missing input ${f} — put the sample media in assets/ first.`);
   }
@@ -61,11 +76,11 @@ for (const f of [AVATAR, BROLL]) {
 mkdirSync(join(root, 'outputs'), { recursive: true });
 
 process.stdout.write('Rendering video...\n');
-const result = spawnSync(
-  process.execPath,
-  [join(root, 'tools/compositor.mjs'), '--avatar', AVATAR, '--broll', BROLL, '--out', OUT],
-  { cwd: root, stdio: 'inherit' },
-);
+const args = [join(root, 'tools/compositor.mjs'), '--avatar', AVATAR, '--avatar-center-x', AVATAR_CENTER_X];
+for (const b of BROLLS) args.push('--broll', b);
+args.push('--audio', AUDIO, '--out', OUT);
+
+const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
 if (result.error) fail(result.error.message);
 if (result.status !== 0) process.exit(result.status || 1);
 
