@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 1920 1080" font-family="sans-serif">
+  <!-- Full-frame b-roll -->
+  <rect x="0" y="0" width="1920" height="1080" fill="#2b3a4a"/>
+  <text x="960" y="200" fill="#9fb3c8" font-size="46" text-anchor="middle">b-roll — scaled + centre-cropped to fill 1920x1080</text>
+
+  <!-- Avatar bubble: 324px circle, 40px margin, bottom-left -->
+  <!-- centre x = 40 + 162 = 202 ; centre y = 1080 - 40 - 162 = 878 ; r = 162 -->
+  <circle cx="202" cy="878" r="162" fill="#3f6fb0" stroke="#ffffff" stroke-width="6"/>
+  <text x="202" y="888" fill="#ffffff" font-size="34" text-anchor="middle">avatar</text>
+
+  <!-- Margin annotations -->
+  <line x1="0" y1="1040" x2="40" y2="1040" stroke="#f0c674" stroke-width="4"/>
+  <text x="70" y="1052" fill="#f0c674" font-size="30">40px margin</text>
+  <text x="420" y="895" fill="#9fb3c8" font-size="30">⌀324px (~30% of height), bottom-left</text>
+
+  <rect x="3" y="3" width="1914" height="1074" fill="none" stroke="#5a6b7b" stroke-width="6"/>
+</svg>
