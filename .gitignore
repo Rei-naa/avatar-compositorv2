@@ -1,9 +1,4 @@
 node_modules/
 
-# Rendered outputs (keep the folder, ignore the media)
-outputs/*
-!outputs/.gitkeep
-
-
 *.log
 .DS_Store
