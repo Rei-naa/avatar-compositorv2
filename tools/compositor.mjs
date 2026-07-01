@@ -240,9 +240,16 @@ function buildFfmpegArgs(o, durationSec) {
 
 // One still-image background segment with a slow centre zoom (Ken Burns). The
 // image is pre-scaled larger so zoompan's integer crop steps stay smooth.
+//
+// The zoom ramps evenly from 1.0 to ZOOM_MAX across the whole time the still is
+// shown (increment = total zoom / frame count), so the speed self-adjusts to the
+// still's duration. ZOOM_MAX is kept small on purpose: a ~5% push reads as a
+// gentle, near-imperceptible drift that matches the pacing of the video clips,
+// not a fast transition.
+const ZOOM_MAX = 1.05;
 function zoomBgChain(inLabel, outLabel, { width, height, duration, fps }) {
   const frames = Math.max(1, Math.round(duration * fps));
-  const zmax = 1.12;
+  const zmax = ZOOM_MAX;
   const inc = ((zmax - 1) / frames).toFixed(6);
   return (
     `[${inLabel}]scale=${2 * width}:${2 * height}:force_original_aspect_ratio=increase,` +
