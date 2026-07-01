@@ -35,6 +35,8 @@ const DEFAULTS = {
   ffmpeg: process.env.FFMPEG_PATH || 'ffmpeg',
   ffprobe: process.env.FFPROBE_PATH || 'ffprobe',
   supersample: 2, // render the circle mask NxN larger, then downscale for AA
+  avatarCenterX: 0.5, // where to centre the square avatar crop (0=left, 1=right)
+  avatarCenterY: 0.5, // 0=top, 1=bottom; only bites when the source has slack
 };
 
 const POSITIONS = {
@@ -81,6 +83,12 @@ Options:
                       to --audio/--duration, else 4s.
   --bubble  <px>      Circular bubble diameter (pip). Default ${DEFAULTS.bubble} (~30% of height).
   --margin  <px>      Edge margin for the bubble (pip). Default ${DEFAULTS.margin}.
+  --avatar-center-x <0..1>
+                      Horizontal centre of the avatar's square crop (0=left,
+                      0.5=centre, 1=right). Pan it to centre an off-centre face.
+  --avatar-center-y <0..1>
+                      Vertical centre of the crop (only bites if the source is
+                      taller than wide). Default 0.5.
   --position <pos>    bubble corner (pip): bottom-left (default), bottom-right,
                       top-left, top-right.
   --width   <px>      Output width. Default ${DEFAULTS.width}.
@@ -110,6 +118,7 @@ function parseArgs(argv) {
   const flags = new Set(['help', 'dry-run', 'self-test']);
   const numeric = new Set([
     'bubble', 'margin', 'width', 'height', 'crf', 'supersample', 'duration', 'still-duration',
+    'avatar-center-x', 'avatar-center-y',
   ]);
   const lists = new Set(['avatar', 'broll']); // repeatable -> one scene per pair
   for (let i = 0; i < argv.length; i++) {
@@ -153,13 +162,23 @@ function isImage(file) {
   return /\.(jpe?g|png|webp|bmp|gif|tiff?)$/i.test(file);
 }
 
-// Avatar -> centre-crop to a square, upscale, punch a hard circular alpha mask
-// with geq, then downscale (the downscale anti-aliases the edge).
-function circleAvatarChain(inLabel, outLabel, { bubble, supersample }) {
+// Avatar -> crop to a square, upscale, punch a hard circular alpha mask with geq,
+// then downscale (the downscale anti-aliases the edge). The square defaults to a
+// centred crop; --avatar-center-x/-y pan it (e.g. to keep an off-centre face in
+// the middle of the bubble). clip() keeps the crop window inside the frame.
+function circleAvatarChain(inLabel, outLabel, o) {
+  const { bubble, supersample, avatarCenterX = 0.5, avatarCenterY = 0.5 } = o;
   const big = Math.max(1, Math.round(bubble * supersample));
   const r = big / 2;
+  const sq = `'min(iw,ih)'`;
+  const crop =
+    avatarCenterX === 0.5 && avatarCenterY === 0.5
+      ? `crop=${sq}:${sq}` // centred (unchanged default)
+      : `crop=${sq}:${sq}:` +
+        `'clip(iw*${avatarCenterX}-min(iw,ih)/2,0,iw-min(iw,ih))':` +
+        `'clip(ih*${avatarCenterY}-min(iw,ih)/2,0,ih-min(iw,ih))'`;
   return (
-    `[${inLabel}]crop='min(iw,ih)':'min(iw,ih)',scale=${big}:${big},format=rgba,` +
+    `[${inLabel}]${crop},scale=${big}:${big},format=rgba,` +
     `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-${r},Y-${r}),${r}),255,0)',` +
     `scale=${bubble}:${bubble}[${outLabel}]`
   );

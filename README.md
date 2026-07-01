@@ -35,11 +35,17 @@ node tools/compositor.mjs \
   --bubble 324 \
   --margin 40 \
   --position bottom-left \   # or bottom-right / top-left / top-right
+  --avatar-center-x 0.5 \    # pan the square crop to centre an off-centre face
   --crf 18 \
   --preset veryfast
 ```
 
 Run `node tools/compositor.mjs --help` for the full option list.
+
+The avatar is square-cropped before the circular mask. If the subject's face
+isn't centred in the source frame, pan the crop with `--avatar-center-x`
+(`0`=left … `1`=right; `--avatar-center-y` for tall sources) so the face sits in
+the middle of the bubble — e.g. `frame1.mp4` centres nicely at `0.52`.
 
 ### Bonus variant: split-screen
 
