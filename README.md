@@ -67,6 +67,24 @@ and **both** the avatar bubble and the b-roll loop to fill. Note: a short avatar
 clip will visibly loop, and it won't lip-sync to an unrelated voiceover — with
 these assets it's a "talking-head b-roll" bubble, not synced narration.
 
+### Multi-scene storyboard (repeat `--avatar` / `--broll`)
+
+Repeat `--avatar` and `--broll` in **pairs** to build a multi-scene video. The
+pairs are composited (PiP each) and concatenated, each scene getting an equal
+slice of the total length. Backgrounds can be **stills** (`.jpg` / `.png` / …)
+or clips. Set the total with `--audio` (voiceover) or `--duration`:
+
+```bash
+node tools/compositor.mjs \
+  --broll assets/frame1-background.jpg --avatar assets/frame1.mp4 \
+  --broll assets/frame4-background.png --avatar assets/frame4.mp4 \
+  --audio assets/audio.mp3 --out outputs/result.mp4
+```
+
+This gives a 37s video: scene 1 = the sea still with `frame1` in the bubble,
+scene 2 = the parchment still with `frame4` in the bubble, over the full
+voiceover. The last scene is padded slightly so the video always covers the audio.
+
 ## Docker
 
 Docker installs `ffmpeg` inside the image. The default compose command prints
