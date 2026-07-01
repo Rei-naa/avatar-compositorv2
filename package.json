@@ -12,6 +12,8 @@
   },
   "scripts": {
     "start": "node tools/compositor.mjs --help",
+    "render": "node scripts/render-demo.js",
+    "render:docker": "bash scripts/render-demo-docker.sh",
     "check:js": "node --check tools/compositor.mjs && node tools/compositor.mjs --self-test"
   }
 }

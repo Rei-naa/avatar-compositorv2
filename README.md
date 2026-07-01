@@ -8,7 +8,7 @@ inside a circular picture-in-picture bubble over full-frame b-roll footage.
 ## Requirements
 
 - Node.js 22+
-- `ffmpeg` (and `ffprobe`) available on PATH, **or** Docker (the image installs them).
+- `ffmpeg` **and** `ffprobe` available on PATH, **or** Docker (the image installs them).
 
 ## Installation
 
@@ -107,17 +107,45 @@ Design (this is the important part):
   plays in full). When `--audio`/`--duration` is given, the **still** durations
   auto-fit so the total matches the narration.
 
-## Docker
+## Render the demo
 
-Docker installs `ffmpeg` inside the image. The default compose command prints
-CLI help, so this builds and exits cleanly from a fresh clone:
+Both workflows below run the **same** compositor command on the sample media
+(`frame4.mp4` avatar over `frame2.mp4` b-roll) and produce the **same**
+`outputs/result.mp4`. Pick one.
+
+### Local (Recommended)
+
+Uses your locally installed tools — no containers. Prerequisites, all on your
+PATH:
+
+- **Node.js** 22+
+- **ffmpeg**
+- **ffprobe** (ships with ffmpeg)
 
 ```bash
-docker compose up --build
+npm run render
 ```
 
-To render, mount your media (via the `assets/` and `outputs/` volumes in
-`docker-compose.yml`) and pass paths:
+This runs [`scripts/render-demo.js`](scripts/render-demo.js), which checks that
+`node`, `ffmpeg` and `ffprobe` are available (failing fast with a clear message if
+not), creates `outputs/` if needed, and renders with your system ffmpeg:
+
+```bash
+node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 --out outputs/result.mp4
+```
+
+### Docker (Optional)
+
+Docker is **optional** — only for those who prefer a containerised environment.
+The image installs `ffmpeg`/`ffprobe` for you, so you just need Docker itself.
+
+```bash
+npm run render:docker
+```
+
+This runs [`scripts/render-demo-docker.sh`](scripts/render-demo-docker.sh), which
+builds the image if necessary and runs the same render inside the container. The
+equivalent raw command:
 
 ```bash
 docker compose run --rm compositor node tools/compositor.mjs \
@@ -126,16 +154,14 @@ docker compose run --rm compositor node tools/compositor.mjs \
   --out    outputs/result.mp4
 ```
 
-## Quick demo
-
-With the sample media in `assets/`, render the full background-sequence demo
-(via Docker) in one command:
+The default compose command prints CLI help, so a fresh clone comes up cleanly with
+no media:
 
 ```bash
-bash scripts/render-demo.sh
+docker compose up --build
 ```
 
-It builds the image, renders `outputs/result.mp4`, and prints the output summary.
+Media is mounted via the `assets/` and `outputs/` volumes in `docker-compose.yml`.
 
 ## Checks
 
@@ -159,8 +185,9 @@ the filter graphs offline and asserts them (no `ffmpeg` needed).
 - **Exact duration.** `ffprobe` reads the driving clip's duration (the avatar,
   or the `--audio` track when given) and passes `-t`; if `ffprobe` is unavailable
   it falls back to `-shortest`.
-- **Sample media is not committed** (it's large). Drop clips in `assets/` or pass
-  any paths. `outputs/` and `assets/` are git-ignored.
+- **Sample media and the demo output are committed** so the demo runs (and
+  `outputs/result.mp4` is viewable) straight from a clone. Drop your own clips in
+  `assets/` or pass any paths; `npm run render` regenerates `outputs/result.mp4`.
 
 ## Limitations
 
