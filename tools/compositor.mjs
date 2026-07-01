@@ -1,22 +1,10 @@
 #!/usr/bin/env node
-// avatar-compositor
-//
-// Standalone CLI that shells out to ffmpeg to composite a talking-host
-// ("avatar") clip over full-frame b-roll footage.
-//
-//   node tools/compositor.mjs --avatar avatar.mp4 --broll broll.mp4 --out result.mp4
-//
-// Default layout (matches the spec / diagram):
-//   - b-roll is scaled + centre-cropped to fill the whole 1920x1080 frame,
-//   - the avatar sits in a circular bubble in the bottom-left corner
-//     (~30% of the height = 324px, 40px margin from the edges),
-//   - audio is taken from the avatar clip (the voiceover),
-//   - output length == avatar length; the b-roll is looped/trimmed to match.
-//
-// There is no shared ffmpeg helper in this repo to mirror (src/ffmpeg.js does
-// not exist), so this module keeps its own tiny, dependency-free wrapper around
-// child_process.spawn: arguments are always passed as an array (never through a
-// shell), which sidesteps quoting/injection issues with the filter graph.
+// avatar-compositor: a standalone, dependency-free ffmpeg CLI that composites a
+// talking-host ("avatar") clip into a circular corner bubble over full-frame
+// b-roll. Two modes: single --avatar + single --broll (pip or split), and a
+// background sequence (one avatar over an ordered --broll list, played once).
+// ffmpeg is spawned with an argv array (never a shell), so the filter graph needs
+// no escaping. No shared ffmpeg helper exists in this repo to reuse.
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -34,7 +22,6 @@ const DEFAULTS = {
   preset: 'veryfast',
   ffmpeg: process.env.FFMPEG_PATH || 'ffmpeg',
   ffprobe: process.env.FFPROBE_PATH || 'ffprobe',
-  supersample: 2, // render the circle mask NxN larger, then downscale for AA
   avatarCenterX: 0.5, // where to centre the square avatar crop (0=left, 1=right)
   avatarCenterY: 0.5, // 0=top, 1=bottom; only bites when the source has slack
 };
@@ -117,10 +104,10 @@ function parseArgs(argv) {
   const opts = { ...DEFAULTS };
   const flags = new Set(['help', 'dry-run', 'self-test']);
   const numeric = new Set([
-    'bubble', 'margin', 'width', 'height', 'crf', 'supersample', 'duration', 'still-duration',
+    'bubble', 'margin', 'width', 'height', 'crf', 'duration', 'still-duration',
     'avatar-center-x', 'avatar-center-y',
   ]);
-  const lists = new Set(['avatar', 'broll']); // repeatable -> one scene per pair
+  const lists = new Set(['avatar', 'broll']); // repeatable -> opts.avatars / opts.brolls
   for (let i = 0; i < argv.length; i++) {
     let arg = argv[i];
     if (!arg.startsWith('--')) throw new Error(`Unexpected argument: ${arg}`);
@@ -141,8 +128,7 @@ function parseArgs(argv) {
       if (value === undefined) throw new Error(`Missing value for --${key}`);
     }
     if (lists.has(key)) {
-      (opts[`${key}s`] ||= []).push(value); // opts.avatars / opts.brolls
-      opts[camel] = value; // keep last for back-compat / single-scene reuse
+      (opts[`${key}s`] ||= []).push(value); // main resolves the singular later
       continue;
     }
     opts[camel] = numeric.has(key) ? Number(value) : value;
@@ -153,22 +139,22 @@ function parseArgs(argv) {
   return opts;
 }
 
-// b-roll (input 1) -> cover the full frame.
-function coverChain(inputLabel, w, h) {
-  return `[${inputLabel}]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1`;
+// Scale + centre-crop an input to fill w x h (cover, no letterboxing).
+function coverChain(inLabel, w, h) {
+  return `[${inLabel}]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1`;
 }
 
 function isImage(file) {
   return /\.(jpe?g|png|webp|bmp|gif|tiff?)$/i.test(file);
 }
 
-// Avatar -> crop to a square, upscale, punch a hard circular alpha mask with geq,
-// then downscale (the downscale anti-aliases the edge). The square defaults to a
-// centred crop; --avatar-center-x/-y pan it (e.g. to keep an off-centre face in
-// the middle of the bubble). clip() keeps the crop window inside the frame.
+const SUPERSAMPLE = 2; // build the circle mask 2x then downscale -> anti-aliased edge
+
+// Avatar -> square crop, upscale, circular alpha mask via geq, downscale. The crop
+// defaults to centred; --avatar-center-x/-y pan it, and clip() keeps it in-frame.
 function circleAvatarChain(inLabel, outLabel, o) {
-  const { bubble, supersample, avatarCenterX = 0.5, avatarCenterY = 0.5 } = o;
-  const big = Math.max(1, Math.round(bubble * supersample));
+  const { bubble, avatarCenterX = 0.5, avatarCenterY = 0.5 } = o;
+  const big = Math.max(1, Math.round(bubble * SUPERSAMPLE));
   const r = big / 2;
   const sq = `'min(iw,ih)'`;
   const crop =
@@ -220,6 +206,14 @@ function buildGraph(o) {
   throw new Error(`Unknown --variant "${o.variant}". Use: pip, split`);
 }
 
+// Shared H.264/AAC MP4 encode tail, ending with the output path.
+function encodeArgs(o) {
+  return [
+    '-c:v', 'libx264', '-preset', o.preset, '-crf', String(o.crf), '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', o.out,
+  ];
+}
+
 function buildFfmpegArgs(o, durationSec) {
   const { graph, videoLabel } = buildGraph(o);
   const hasExternalAudio = Boolean(o.audio);
@@ -244,28 +238,13 @@ function buildFfmpegArgs(o, durationSec) {
   } else {
     args.push('-shortest');
   }
-  args.push(
-    '-c:v', 'libx264',
-    '-preset', o.preset,
-    '-crf', String(o.crf),
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', '192k',
-    '-movflags', '+faststart',
-    o.out,
-  );
+  args.push(...encodeArgs(o));
   return args;
 }
 
-// One still-image background segment with a slow centre zoom (Ken Burns). The
-// image is pre-scaled larger so zoompan's integer crop steps stay smooth.
-//
-// The zoom ramps evenly from 1.0 to ZOOM_MAX across the whole time the still is
-// shown (increment = total zoom / frame count), so the speed self-adjusts to the
-// still's duration. ZOOM_MAX is kept small on purpose: a ~5% push reads as a
-// gentle, near-imperceptible drift that matches the pacing of the video clips,
-// not a fast transition.
-const ZOOM_MAX = 1.05;
+// Still background with a gentle Ken Burns zoom to ZOOM_MAX over its full
+// duration; pre-scaled 2x so zoompan's integer crop steps stay smooth.
+const ZOOM_MAX = 1.05; // ~5% push: a subtle drift, not a transition
 function zoomBgChain(inLabel, outLabel, { width, height, duration, fps }) {
   const frames = Math.max(1, Math.round(duration * fps));
   const zmax = ZOOM_MAX;
@@ -287,14 +266,11 @@ function videoBgChain(inLabel, outLabel, { width, height, fps }) {
   );
 }
 
-// Build a background-sequence render: an ordered list of backgrounds concatenated
-// exactly once (video clips at natural length, stills for `duration` with a zoom),
-// with ONE persistent avatar overlaid on top for the whole video. The avatar is a
-// single global input looped on its own clock (`-stream_loop -1` + one trim to the
-// total), so it never restarts at background boundaries -- it just loops smoothly
-// because the source clip is shorter than the narration.
+// Background-sequence render: backgrounds concatenated once (videos at natural
+// length, stills zoomed) with ONE avatar overlaid for the whole video. The avatar
+// loops on its own clock so it never restarts at a background boundary.
 function buildSequenceArgs(o, backgrounds, total, fps = 30) {
-  const { width, height, position, margin, crf, preset } = o;
+  const { width, height, position, margin } = o;
   const { x, y } = overlayPos(position, margin);
   const n = backgrounds.length;
 
@@ -333,16 +309,7 @@ function buildSequenceArgs(o, backgrounds, total, fps = 30) {
   args.push('-filter_complex', chains.join(';'), '-map', '[vout]');
   if (o.audio) args.push('-map', `${audioIdx}:a`);
   args.push('-t', total.toFixed(3));
-  args.push(
-    '-c:v', 'libx264',
-    '-preset', preset,
-    '-crf', String(crf),
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', '192k',
-    '-movflags', '+faststart',
-    o.out,
-  );
+  args.push(...encodeArgs(o));
   return args;
 }
 
@@ -391,11 +358,9 @@ async function probeDurationSec(file, ffprobe) {
   }
 }
 
-// Resolve the ordered background list into concrete per-segment durations.
-// Video clips keep their natural length; stills are sized to --still-duration,
-// or auto-fit so the sequence total matches --audio / --duration. The total the
-// avatar + audio are matched to is the SUM of the segments (background-driven),
-// which guarantees the sequence plays once in full without truncation.
+// Resolve per-segment durations: videos keep natural length; stills use
+// --still-duration or auto-fit so the total matches --audio/--duration. Total is
+// the sum of segments, so the sequence always plays once in full.
 async function resolveSequence(o, brolls) {
   const backgrounds = brolls.map((file) => ({ file, image: isImage(file) }));
   const natural = await Promise.all(
@@ -525,7 +490,7 @@ async function main() {
     args = buildFfmpegArgs(opts, duration);
   } else {
     // Background sequence: many --broll under ONE persistent avatar (--avatar).
-    if (opts.variant && opts.variant !== 'pip') {
+    if (opts.variant !== 'pip') {
       throw new Error('The background sequence supports only --variant pip.');
     }
     if (avatars.length > 1) {

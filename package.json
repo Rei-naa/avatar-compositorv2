@@ -12,7 +12,6 @@
   },
   "scripts": {
     "start": "node tools/compositor.mjs --help",
-    "compose": "node tools/compositor.mjs",
     "check:js": "node --check tools/compositor.mjs && node tools/compositor.mjs --self-test"
   }
 }

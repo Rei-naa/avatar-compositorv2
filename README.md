@@ -10,6 +10,11 @@ inside a circular picture-in-picture bubble over full-frame b-roll footage.
 - Node.js 22+
 - `ffmpeg` (and `ffprobe`) available on PATH, **or** Docker (the image installs them).
 
+## Installation
+
+No dependencies to install — it's a single zero-dependency Node script. Clone the
+repo and run it with Node (`node tools/compositor.mjs …`) or via Docker (below).
+
 ## Usage
 
 ```bash
@@ -146,13 +151,25 @@ the filter graphs offline and asserts them (no `ffmpeg` needed).
 - **Sample media is not committed** (it's large). Drop clips in `assets/` or pass
   any paths. `outputs/` and `assets/` are git-ignored.
 
-## How I approached it (and what I'd improve)
+## Limitations
 
-Single self-contained `ffmpeg` filter graph: cover-fill the b-roll, centre-crop
-the avatar to a square, mask it into a circle, overlay bottom-left; the avatar
-drives duration and is the only mapped audio. Zero npm dependencies, so the
-Docker build only needs `apt` for `ffmpeg`. With more time I'd add a real
-background-removed "cutout" variant (needs a matting model — `ffmpeg`
-color-keying can't isolate a host on a non-uniform background), an optional
-bubble border/shadow, and a tiny fixture-based regression test on a couple of
-sampled output frames.
+- **The avatar is not a continuous talking track.** If its clip is shorter than
+  the narration it loops (by design — the compositor never synthesises or extends
+  the avatar). It loops on its own clock, so it doesn't restart at scene cuts.
+- **No true background removal / "cutout".** That needs a matting model; `ffmpeg`
+  colour-keying can't isolate a host on a non-uniform background.
+- **Small source stills upscale soft** when filled to 1080p (e.g. a 500×338 image).
+- **The background sequence needs `ffprobe`** to read clip durations.
+- Still images are intended as backgrounds in the sequence; single-scene `--broll`
+  is designed around video clips.
+
+## Approach
+
+Two independent layers built in one `ffmpeg` graph: the `--broll` list is
+`concat`-ed once into the background timeline (videos at natural length, stills
+cover-filled with a gentle zoom), and a single circle-masked avatar is overlaid
+across the whole thing, looped on its own clock. Length comes from the audio /
+backgrounds; the avatar and b-roll are matched to it. Zero npm dependencies, so
+the Docker build only needs `apt` for `ffmpeg`. With more time I'd add a real
+background-removed cutout variant, an optional bubble border/shadow, and a
+fixture-based regression test on a few sampled output frames.
