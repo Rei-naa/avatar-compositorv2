@@ -41,6 +41,8 @@ node tools/compositor.mjs \
   --margin 40 \
   --position bottom-left \   # or bottom-right / top-left / top-right
   --avatar-center-x 0.5 \    # pan the square crop to centre an off-centre face
+  --avatar-border-color '#FFFFFF' \  # optional ring colour (hex or common name)
+  --avatar-border-thickness 6 \      # optional ring thickness in px
   --crf 18 \
   --preset veryfast
 ```
@@ -51,6 +53,48 @@ The avatar is square-cropped before the circular mask. If the subject's face
 isn't centred in the source frame, pan the crop with `--avatar-center-x`
 (`0`=left … `1`=right; `--avatar-center-y` for tall sources) so the face sits in
 the middle of the bubble — e.g. `frame1.mp4` centres nicely at `0.52`.
+
+### Optional bubble border
+
+Add a thin ring around the circular bubble with `--avatar-border-color` and
+`--avatar-border-thickness`:
+
+- **`--avatar-border-color <color>`** — a hex value (`#FFFFFF`, `#000`, `0xRRGGBB`)
+  or a common colour name (`white`, `black`, `red`, …). Defaults to `#FFFFFF` when
+  only a thickness is given.
+- **`--avatar-border-thickness <px>`** — ring thickness in pixels. Defaults to `6`
+  when only a colour is given.
+
+Both flags are **optional and off by default**: omit them and the output is
+identical to before. The ring is drawn just *inside* the circle edge, so the
+bubble diameter and position are unchanged. It applies to the circular bubble
+(pip **and** the background sequence), not to `--variant split`.
+
+The border flags **only affect the bubble's appearance** — they never change the
+duration, background sequence, audio, or avatar behaviour. You add them to *any*
+of the commands above and everything else renders exactly as it would without
+them.
+
+**Minimal example** (single b-roll, no voiceover → a short ~4s clip, just enough
+to eyeball the ring):
+
+```bash
+node tools/compositor.mjs --avatar assets/frame4.mp4 --broll assets/frame2.mp4 \
+  --out outputs/bordered.mp4 --avatar-border-color '#FFFFFF' --avatar-border-thickness 6
+```
+
+**Full demo with a border** — the exact same inputs, length (~37s), background
+sequence and audio as [`npm run render`](#render-the-demo), with only the border
+added:
+
+```bash
+node tools/compositor.mjs --avatar assets/frame1.mp4 --avatar-center-x 0.52 \
+  --broll assets/frame1-background.jpg --broll assets/frame2.mp4 --broll assets/frame3.mp4 \
+  --broll assets/frame4-background.png --broll assets/frame5.mp4 --broll assets/frame6.mp4 \
+  --broll assets/frame7.mp4 --broll assets/frame8.mp4 --broll assets/frame9.mp4 \
+  --audio assets/audio.mp3 --avatar-border-color '#FFFFFF' --avatar-border-thickness 6 \
+  --out outputs/result-bordered.mp4
+```
 
 ### Bonus variant: split-screen
 
@@ -216,5 +260,6 @@ cover-filled with a gentle zoom), and a single circle-masked avatar is overlaid
 across the whole thing, looped on its own clock. Length comes from the audio /
 backgrounds; the avatar and b-roll are matched to it. Zero npm dependencies, so
 the Docker build only needs `apt` for `ffmpeg`. With more time I'd add a real
-background-removed cutout variant, an optional bubble border/shadow, and a
-fixture-based regression test on a few sampled output frames.
+background-removed cutout variant, an optional bubble drop-shadow (the bubble
+border ships now via `--avatar-border-*`), and a fixture-based regression test on
+a few sampled output frames.

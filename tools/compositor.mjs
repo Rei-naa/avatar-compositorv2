@@ -76,6 +76,17 @@ Options:
   --avatar-center-y <0..1>
                       Vertical centre of the crop (only bites if the source is
                       taller than wide). Default 0.5.
+  --avatar-border-color <color>
+                      Optional thin ring around the circular bubble. Accepts a
+                      hex colour (#FFFFFF, #000, 0xRRGGBB) or a common name
+                      (white, black, red, ...). Default ${DEFAULT_BORDER_COLOR} when only
+                      --avatar-border-thickness is given.
+  --avatar-border-thickness <px>
+                      Border ring thickness in pixels, drawn just inside the
+                      bubble edge (size + position unchanged). Enables the border;
+                      omit both border flags for no border. Default ${DEFAULT_BORDER_THICKNESS} when only
+                      --avatar-border-color is given. Applies to the circular
+                      bubble (pip + background sequence), not --variant split.
   --position <pos>    bubble corner (pip): bottom-left (default), bottom-right,
                       top-left, top-right.
   --width   <px>      Output width. Default ${DEFAULTS.width}.
@@ -105,7 +116,7 @@ function parseArgs(argv) {
   const flags = new Set(['help', 'dry-run', 'self-test']);
   const numeric = new Set([
     'bubble', 'margin', 'width', 'height', 'crf', 'duration', 'still-duration',
-    'avatar-center-x', 'avatar-center-y',
+    'avatar-center-x', 'avatar-center-y', 'avatar-border-thickness',
   ]);
   const lists = new Set(['avatar', 'broll']); // repeatable -> opts.avatars / opts.brolls
   for (let i = 0; i < argv.length; i++) {
@@ -150,8 +161,54 @@ function isImage(file) {
 
 const SUPERSAMPLE = 2; // build the circle mask 2x then downscale -> anti-aliased edge
 
+// Optional bubble border defaults (only used once a border flag is present, so an
+// unbordered render stays byte-identical to the previous behaviour).
+const DEFAULT_BORDER_COLOR = '#FFFFFF';
+const DEFAULT_BORDER_THICKNESS = 6; // px of the final bubble
+
+// A few common CSS colour names so --avatar-border-color accepts white/black/etc.
+const NAMED_COLORS = {
+  white: '#ffffff', black: '#000000', red: '#ff0000', green: '#008000',
+  blue: '#0000ff', yellow: '#ffff00', cyan: '#00ffff', magenta: '#ff00ff',
+  gray: '#808080', grey: '#808080', orange: '#ffa500',
+};
+
+// Parse a CSS-style colour (#RGB, #RRGGBB, 0xRRGGBB, or a common name) to 0..255 RGB.
+function parseColor(input) {
+  let s = String(input).trim().toLowerCase();
+  if (NAMED_COLORS[s]) s = NAMED_COLORS[s];
+  s = s.replace(/^0x/, '#');
+  if (!s.startsWith('#')) s = `#${s}`;
+  let hex = s.slice(1);
+  if (/^[0-9a-f]{3}$/.test(hex)) hex = hex.replace(/./g, (c) => c + c); // #abc -> #aabbcc
+  if (!/^[0-9a-f]{6}$/.test(hex)) {
+    throw new Error(
+      `Invalid --avatar-border-color "${input}". Use a hex value like #FFFFFF or a common colour name.`,
+    );
+  }
+  return {
+    r: parseInt(hex.slice(0, 2), 16),
+    g: parseInt(hex.slice(2, 4), 16),
+    b: parseInt(hex.slice(4, 6), 16),
+  };
+}
+
+// Resolve the optional bubble border from the CLI opts. Returns null when neither
+// border flag is given (or the thickness is <= 0) so the mask is left untouched.
+function resolveBorder(o) {
+  const hasColor = o.avatarBorderColor !== undefined;
+  const hasThickness = Number.isFinite(o.avatarBorderThickness);
+  if (!hasColor && !hasThickness) return null;
+  const thickness = hasThickness ? o.avatarBorderThickness : DEFAULT_BORDER_THICKNESS;
+  if (!(thickness > 0)) return null;
+  return { ...parseColor(hasColor ? o.avatarBorderColor : DEFAULT_BORDER_COLOR), thickness };
+}
+
 // Avatar -> square crop, upscale, circular alpha mask via geq, downscale. The crop
 // defaults to centred; --avatar-center-x/-y pan it, and clip() keeps it in-frame.
+// An optional border paints a ring of border colour just inside the circle edge:
+// only the R/G/B expressions change, the alpha (outer) radius is untouched, so the
+// bubble size + position are identical to the borderless bubble.
 function circleAvatarChain(inLabel, outLabel, o) {
   const { bubble, avatarCenterX = 0.5, avatarCenterY = 0.5 } = o;
   const big = Math.max(1, Math.round(bubble * SUPERSAMPLE));
@@ -163,9 +220,19 @@ function circleAvatarChain(inLabel, outLabel, o) {
       : `crop=${sq}:${sq}:` +
         `'clip(iw*${avatarCenterX}-min(iw,ih)/2,0,iw-min(iw,ih))':` +
         `'clip(ih*${avatarCenterY}-min(iw,ih)/2,0,ih-min(iw,ih))'`;
+  const border = resolveBorder(o);
+  const rgb = border
+    ? (() => {
+        // Thickness is final-bubble px; the mask is built at SUPERSAMPLE scale.
+        const rInner = Math.max(0, r - border.thickness * SUPERSAMPLE);
+        const ring = (chan, val) =>
+          `${chan}='if(lte(hypot(X-${r},Y-${r}),${rInner}),${chan}(X,Y),${val})'`;
+        return `${ring('r', border.r)}:${ring('g', border.g)}:${ring('b', border.b)}`;
+      })()
+    : `r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'`;
   return (
     `[${inLabel}]${crop},scale=${big}:${big},format=rgba,` +
-    `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-${r},Y-${r}),${r}),255,0)',` +
+    `geq=${rgb}:a='if(lte(hypot(X-${r},Y-${r}),${r}),255,0)',` +
     `scale=${bubble}:${bubble}[${outLabel}]`
   );
 }
@@ -407,6 +474,34 @@ function selfTest() {
   assert(pip.graph.includes('crop=1920:1080'), 'b-roll crop to frame');
   assert(/geq=.*a='if\(lte\(hypot/.test(pip.graph), 'circular alpha mask');
   assert(pip.graph.includes('scale=324:324[av]'), 'bubble downscale to 324');
+
+  // No border flags -> the geq RGB copy is byte-identical to the historic graph.
+  assert(
+    pip.graph.includes("geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-324,Y-324),324),255,0)'"),
+    'no border -> unchanged geq (backward compatible)',
+  );
+
+  // Border: paints a ring inside the circle. bubble 324 -> big 648 -> r 324;
+  // thickness 8 * SUPERSAMPLE(2) = 16 -> inner radius 308. Alpha radius stays 324.
+  const bordered = buildPipGraph({ ...DEFAULTS, avatarBorderColor: '#FF0000', avatarBorderThickness: 8 });
+  assert(bordered.graph.includes("r='if(lte(hypot(X-324,Y-324),308),r(X,Y),255)'"), 'border R: inner radius + colour');
+  assert(bordered.graph.includes("g='if(lte(hypot(X-324,Y-324),308),g(X,Y),0)'"), 'border G channel');
+  assert(bordered.graph.includes("b='if(lte(hypot(X-324,Y-324),308),b(X,Y),0)'"), 'border B channel');
+  assert(bordered.graph.includes("a='if(lte(hypot(X-324,Y-324),324),255,0)'"), 'border keeps outer alpha radius (position unchanged)');
+
+  // Named colour + only-color default thickness (6px -> 12 in mask -> inner 312).
+  const named = buildPipGraph({ ...DEFAULTS, avatarBorderColor: 'white' });
+  assert(named.graph.includes("r='if(lte(hypot(X-324,Y-324),312),r(X,Y),255)'"), 'named colour + default thickness');
+
+  // Thickness 0 (or negative) is treated as no border.
+  const zero = buildPipGraph({ ...DEFAULTS, avatarBorderColor: '#FFFFFF', avatarBorderThickness: 0 });
+  assert(zero.graph.includes("geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'"), 'thickness 0 -> no border');
+
+  // CLI parsing: color is a string, thickness is numeric.
+  const bopts = parseArgs(['--avatar', 'a.mp4', '--broll', 'b.mp4', '--out', 'o.mp4',
+    '--avatar-border-color', '#00ff00', '--avatar-border-thickness', '5']);
+  assert(bopts.avatarBorderColor === '#00ff00', 'border colour parsed as string');
+  assert(bopts.avatarBorderThickness === 5, 'border thickness parsed as number');
 
   const br = buildPipGraph({ ...DEFAULTS, position: 'bottom-right', margin: 40 });
   assert(br.graph.includes('overlay=x=W-w-40:y=H-h-40'), 'pip bottom-right overlay position');
